@@ -8,8 +8,9 @@ from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.groq import Groq
 
 # 0. API Keys Setup
-PINECONE_API_KEY = "pcsk_5KBaoZ_UKxon328tHCsihGzdGvx6p9w9iFZB5AFXUkuTDEMKQCuPJ5a8LTuAqayragg7kN"
-GROQ_API_KEY = "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"
+# 0. API Keys Setup
+PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
 INDEX_NAME = "forest-bot-index"
 
 # 1. Page Configuration
