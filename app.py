@@ -54,7 +54,7 @@ def initialize_rag():
     embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
     
     # 100% Free Groq LLM (llama3-8b-8192 is rock-solid and free)
-    llm = Groq(model="openai/gpt-oss-120b", api_key=GROQ_API_KEY, temperature=0.1)
+    llm = Groq(model="llama-3.3-70b-versatile", api_key=GROQ_API_KEY, temperature=0.1)
     
     # Globally Settings වලට Groq සහ Embed model ලබා දීම (OpenAI වැරදීමකින්වත් කතා නොකරන්න)
     Settings.llm = llm
