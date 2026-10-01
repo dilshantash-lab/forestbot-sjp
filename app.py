@@ -1,13 +1,11 @@
 import os
 import streamlit as st
 from pinecone import Pinecone
-from llama_index.core import VectorStoreIndex, Settings
-from llama_index.core.memory import ChatMemoryBuffer
+from llama_index.core import VectorStoreIndex, Settings, PromptTemplate
 from llama_index.vector_stores.pinecone import PineconeVectorStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.groq import Groq
 
-# 0. API Keys Setup
 # 0. API Keys Setup
 PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
@@ -25,8 +23,6 @@ with st.sidebar:
     # New Chat Button
     if st.button("➕ Start New Chat", use_container_width=True):
         st.session_state.messages = []
-        if "chat_engine" in st.session_state:
-            del st.session_state["chat_engine"]
         st.rerun()
         
     st.markdown("---")
@@ -52,9 +48,8 @@ st.markdown("---")
 @st.cache_resource
 def initialize_rag():
     embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
-    llm = Groq(model="llama-3.3-70b-versatile", api_key=GROQ_API_KEY, temperature=0.1)
+    llm = Groq(model="llama-3.1-8b-instant", api_key=GROQ_API_KEY, temperature=0.1)
     
-    # Global Settings
     Settings.llm = llm
     Settings.embed_model = embed_model
     
@@ -64,40 +59,32 @@ def initialize_rag():
     
     index = VectorStoreIndex.from_vector_store(vector_store, embed_model=embed_model)
     
-    qa_prompt_tmpl_str = (
+    qa_template = PromptTemplate(
         "You are ForestBot.SJP, an expert AI assistant for Sri Lankan Forestry & Environmental Sciences.\n"
-        "Context information from retrieved documents is provided below.\n"
+        "Context information from university documents and forestry laws is provided below:\n"
         "---------------------\n"
         "{context_str}\n"
         "---------------------\n"
-        "STRICT SYSTEM INSTRUCTIONS:\n"
-        "1. STRICT DOCUMENT ACCURACY: Never say 'I do not have access' or 'I cannot provide the paper' if document metadata or abstracts exist in the context above. Summarize using whatever text or metadata is available.\n"
-        "2. CONTEXT ALIGNMENT: Base your answer STRICTLY on the retrieved context that matches the query/chat history. Ignore context chunks that belong to completely unrelated topics, regions, or papers.\n"
-        "3. EXACT AUTHOR ATTRIBUTION: Always search the context for explicit Author Names (e.g., 'Ariyarathna, T.D.S., Disanayaka, R.M.S.H.'). NEVER say 'Various researchers' or 'Unknown authors' if author names are present.\n"
-        "4. CONVERSATIONAL FOLLOW-UPS: Maintain absolute focus on the specific document or paper being discussed in recent chat history.\n"
-        "5. LEGAL & PENALTY QUERIES: Provide exact Fine Amounts (LKR), Imprisonment Terms, and Section numbers ONLY IF explicitly requested.\n"
-        "6. Keep responses academic, rigorous, concise, and accurate.\n\n"
+        "INSTRUCTIONS:\n"
+        "1. Base your answer strictly on the provided context.\n"
+        "2. Provide exact legal sections, fines (LKR), and academic details if available.\n"
+        "3. Answer thoroughly and concisely.\n\n"
         "Query: {query_str}\n"
         "Answer: "
     )
     
-    memory = ChatMemoryBuffer.from_defaults(token_limit=3000)
-    
-    # llm එක සෘජුවම chat_engine වෙත ලබා දීම මඟින් OpenAI fallback වීම වළක්වයි
-    chat_engine = index.as_chat_engine(
-        chat_mode="condense_plus_context",
-        memory=memory,
+    query_engine = index.as_query_engine(
         llm=llm,
-        context_prompt=qa_prompt_tmpl_str,
+        text_qa_template=qa_template,
         similarity_top_k=8
     )
     
-    return chat_engine
+    return query_engine
 
 with st.spinner("Connecting Pinecone Cloud Vector Store and Groq LLM..."):
-    chat_engine = initialize_rag()
+    query_engine = initialize_rag()
 
-st.caption("Connected to Cloud Pinecone Index: `forest-bot-index` | Groq Llama 3 Inference Active")
+st.caption("Connected to Cloud Pinecone Index: `forest-bot-index` | Groq Llama 3 Active")
 
 # 5. Chat History Session State
 if "messages" not in st.session_state:
@@ -120,7 +107,7 @@ if prompt := st.chat_input("Ask ForestBot.SJP any forestry or environmental law 
         
     with st.chat_message("assistant"):
         with st.spinner("Searching relevant forestry laws and calculating response..."):
-            response = chat_engine.chat(prompt)
+            response = query_engine.query(prompt)
             
             sources_text = ""
             seen_sources = set()
@@ -130,17 +117,10 @@ if prompt := st.chat_input("Ask ForestBot.SJP any forestry or environmental law 
                     meta = node.node.metadata
                     raw_file_name = meta.get('file_name', 'Unknown Document')
                     page_num = meta.get('page_label', meta.get('page_number', '1'))
-                    
                     clean_title = raw_file_name.replace('+', ' ').replace('_', ' ').replace('.pdf', '')
                     
-                    prompt_words = prompt.lower().split()
-                    ans_lower = response.response.lower()
-                    title_words = [w.lower() for w in clean_title.split() if len(w) > 3]
-                    
-                    is_relevant = any(w in ans_lower for w in title_words[:3]) or any(w in prompt.lower() for w in title_words[:3])
-                    
                     source_id = f"{raw_file_name}_{page_num}"
-                    if source_id not in seen_sources and (is_relevant or len(seen_sources) < 2):
+                    if source_id not in seen_sources and len(seen_sources) < 2:
                         seen_sources.add(source_id)
                         sources_text += (
                             f"• **Research Paper / Document:** `{raw_file_name}`  \n"
@@ -152,7 +132,7 @@ if prompt := st.chat_input("Ask ForestBot.SJP any forestry or environmental law 
             
             if sources_text:
                 st.markdown("---")
-                st.markdown("##### 📚 **Sources & Exact PDF Citations:**")
+                st.markdown("##### 📚 **Sources & Exact Citations:**")
                 st.markdown(sources_text)
                     
     st.session_state.messages.append({
