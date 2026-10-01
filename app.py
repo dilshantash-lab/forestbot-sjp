@@ -50,24 +50,19 @@ st.markdown("---")
 # 4. RAG Initialization Function
 @st.cache_resource
 def initialize_rag():
-    # Embedding Model (384 dimensions)
     embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
-    
-    # 100% Free Groq LLM (llama3-8b-8192 is rock-solid and free)
     llm = Groq(model="llama-3.3-70b-versatile", api_key=GROQ_API_KEY, temperature=0.1)
     
-    # Globally Settings වලට Groq සහ Embed model ලබා දීම (OpenAI වැරදීමකින්වත් කතා නොකරන්න)
+    # Global Settings
     Settings.llm = llm
     Settings.embed_model = embed_model
     
-    # Connecting to Pinecone
     pc = Pinecone(api_key=PINECONE_API_KEY)
     pinecone_index = pc.Index(INDEX_NAME)
     vector_store = PineconeVectorStore(pinecone_index=pinecone_index)
     
     index = VectorStoreIndex.from_vector_store(vector_store, embed_model=embed_model)
     
-    # Academic Prompt Template
     qa_prompt_tmpl_str = (
         "You are ForestBot.SJP, an expert AI assistant for Sri Lankan Forestry & Environmental Sciences.\n"
         "Context information from retrieved documents is provided below.\n"
@@ -78,7 +73,7 @@ def initialize_rag():
         "1. STRICT DOCUMENT ACCURACY: Never say 'I do not have access' or 'I cannot provide the paper' if document metadata or abstracts exist in the context above. Summarize using whatever text or metadata is available.\n"
         "2. CONTEXT ALIGNMENT: Base your answer STRICTLY on the retrieved context that matches the query/chat history. Ignore context chunks that belong to completely unrelated topics, regions, or papers.\n"
         "3. EXACT AUTHOR ATTRIBUTION: Always search the context for explicit Author Names (e.g., 'Ariyarathna, T.D.S., Disanayaka, R.M.S.H.'). NEVER say 'Various researchers' or 'Unknown authors' if author names are present.\n"
-        "4. CONVERSATIONAL FOLLOW-UPS: Maintain absolute focus on the specific document or paper being discussed in the recent chat history.\n"
+        "4. CONVERSATIONAL FOLLOW-UPS: Maintain absolute focus on the specific document or paper being discussed in recent chat history.\n"
         "5. LEGAL & PENALTY QUERIES: Provide exact Fine Amounts (LKR), Imprisonment Terms, and Section numbers ONLY IF explicitly requested.\n"
         "6. Keep responses academic, rigorous, concise, and accurate.\n\n"
         "Query: {query_str}\n"
@@ -87,12 +82,13 @@ def initialize_rag():
     
     memory = ChatMemoryBuffer.from_defaults(token_limit=3000)
     
+    # llm එක සෘජුවම chat_engine වෙත ලබා දීම මඟින් OpenAI fallback වීම වළක්වයි
     chat_engine = index.as_chat_engine(
         chat_mode="condense_plus_context",
         memory=memory,
         llm=llm,
         context_prompt=qa_prompt_tmpl_str,
-        similarity_top_k=15
+        similarity_top_k=8
     )
     
     return chat_engine
