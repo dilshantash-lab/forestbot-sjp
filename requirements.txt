@@ -1,0 +1,6 @@
+streamlit
+pinecone
+llama-index-core
+llama-index-vector-stores-pinecone
+llama-index-embeddings-huggingface
+llama-index-llms-groq
