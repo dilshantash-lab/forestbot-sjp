@@ -49,7 +49,7 @@ st.markdown("---")
 def initialize_rag():
     embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
     llm = HuggingFaceInferenceAPI(
-        model_name="meta-llama/Llama-3.2-3B-Instruct",
+        model_name="HuggingFaceH4/zephyr-7b-beta",
         token=HF_TOKEN,
         temperature=0.1
     )
