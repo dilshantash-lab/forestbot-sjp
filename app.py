@@ -4,14 +4,12 @@ from pinecone import Pinecone
 from llama_index.core import VectorStoreIndex, Settings, PromptTemplate
 from llama_index.vector_stores.pinecone import PineconeVectorStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.llms.gemini import Gemini
+from llama_index.llms.huggingface_api import HuggingFaceInferenceAPI
 
 # 0. API Keys Setup
 PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
-GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+HF_TOKEN = st.secrets["HF_TOKEN"]
 INDEX_NAME = "forest-bot-index"
-
-os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
 
 # 1. Page Configuration
 st.set_page_config(page_title="ForestBot.SJP", page_icon="🌲", layout="wide")
@@ -50,7 +48,11 @@ st.markdown("---")
 @st.cache_resource
 def initialize_rag():
     embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
-    llm = Gemini(model="models/gemini-1.5-flash", api_key=GEMINI_API_KEY, temperature=0.1)
+    llm = HuggingFaceInferenceAPI(
+        model_name="meta-llama/Llama-3.2-3B-Instruct",
+        token=HF_TOKEN,
+        temperature=0.1
+    )
     
     Settings.llm = llm
     Settings.embed_model = embed_model
@@ -83,10 +85,10 @@ def initialize_rag():
     
     return query_engine
 
-with st.spinner("Connecting Pinecone Cloud Vector Store and Gemini Engine..."):
+with st.spinner("Connecting Pinecone Cloud Vector Store and Hugging Face Engine..."):
     query_engine = initialize_rag()
 
-st.caption("Connected to Cloud Pinecone Index: `forest-bot-index` | Gemini Active")
+st.caption("Connected to Cloud Pinecone Index: `forest-bot-index` | Hugging Face Active")
 
 # 5. Chat History Session State
 if "messages" not in st.session_state:
