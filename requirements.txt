@@ -1,6 +1,7 @@
 streamlit
 pinecone
+google-generativeai
 llama-index-core
 llama-index-vector-stores-pinecone
 llama-index-embeddings-huggingface
-llama-index-llms-google-genai
+llama-index-llms-gemini
