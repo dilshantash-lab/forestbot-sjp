@@ -4,14 +4,14 @@ from pinecone import Pinecone
 from llama_index.core import VectorStoreIndex, Settings, PromptTemplate
 from llama_index.vector_stores.pinecone import PineconeVectorStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.llms.google_genai import GoogleGenAI
+from llama_index.llms.gemini import Gemini
 
 # 0. API Keys Setup
 PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
 GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 INDEX_NAME = "forest-bot-index"
 
-os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
+os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
 
 # 1. Page Configuration
 st.set_page_config(page_title="ForestBot.SJP", page_icon="🌲", layout="wide")
@@ -50,7 +50,7 @@ st.markdown("---")
 @st.cache_resource
 def initialize_rag():
     embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
-    llm = GoogleGenAI(model="models/gemini-1.5-flash", api_key=GEMINI_API_KEY, temperature=0.1)
+    llm = Gemini(model="models/gemini-1.5-flash", api_key=GEMINI_API_KEY, temperature=0.1)
     
     Settings.llm = llm
     Settings.embed_model = embed_model
