@@ -83,7 +83,7 @@ if prompt := st.chat_input("Ask ForestBot.SJP any forestry or environmental law 
             # Pinecone Vector Search
             query_results = pinecone_index.query(
                 vector=query_vector,
-                top_k=5,
+                top_k=8,
                 include_metadata=True
             )
             
@@ -122,7 +122,7 @@ if prompt := st.chat_input("Ask ForestBot.SJP any forestry or environmental law 
                     {"role": "system", "content": system_instruction},
                     {"role": "user", "content": f"Context Information:\n{context_text}\n\nUser Question: {prompt}\nAnswer:"}
                 ],
-                model="llama-3.1-8b-instant",
+                model="openai/gpt-oss-120b",
                 temperature=0.1
             )
             
