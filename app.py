@@ -4,11 +4,11 @@ from pinecone import Pinecone
 from llama_index.core import VectorStoreIndex, Settings, PromptTemplate
 from llama_index.vector_stores.pinecone import PineconeVectorStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.llms.groq import Groq
+from llama_index.llms.gemini import Gemini
 
 # 0. API Keys Setup
 PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
-GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
+GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 INDEX_NAME = "forest-bot-index"
 
 # 1. Page Configuration
@@ -48,7 +48,7 @@ st.markdown("---")
 @st.cache_resource
 def initialize_rag():
     embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
-    llm = Groq(model="llama-3.1-8b-instant", api_key=GROQ_API_KEY, temperature=0.1)
+    llm = Gemini(model_name="models/gemini-1.5-flash", api_key=GEMINI_API_KEY, temperature=0.1)
     
     Settings.llm = llm
     Settings.embed_model = embed_model
@@ -81,10 +81,10 @@ def initialize_rag():
     
     return query_engine
 
-with st.spinner("Connecting Pinecone Cloud Vector Store and Groq LLM..."):
+with st.spinner("Connecting Pinecone Cloud Vector Store and Gemini Engine..."):
     query_engine = initialize_rag()
 
-st.caption("Connected to Cloud Pinecone Index: `forest-bot-index` | Groq Llama 3 Active")
+st.caption("Connected to Cloud Pinecone Index: `forest-bot-index` | Gemini Active")
 
 # 5. Chat History Session State
 if "messages" not in st.session_state:
