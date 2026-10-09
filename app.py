@@ -11,6 +11,8 @@ PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
 GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 INDEX_NAME = "forest-bot-index"
 
+os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
+
 # 1. Page Configuration
 st.set_page_config(page_title="ForestBot.SJP", page_icon="🌲", layout="wide")
 
@@ -48,7 +50,7 @@ st.markdown("---")
 @st.cache_resource
 def initialize_rag():
     embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
-    llm = GoogleGenAI(model="gemini-1.5-flash", api_key=GEMINI_API_KEY, temperature=0.1)
+    llm = GoogleGenAI(model="models/gemini-1.5-flash", api_key=GEMINI_API_KEY, temperature=0.1)
     
     Settings.llm = llm
     Settings.embed_model = embed_model
