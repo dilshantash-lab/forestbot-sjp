@@ -4,7 +4,7 @@ from pinecone import Pinecone
 from llama_index.core import VectorStoreIndex, Settings, PromptTemplate
 from llama_index.vector_stores.pinecone import PineconeVectorStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
-from llama_index.llms.gemini import Gemini
+from llama_index.llms.google_genai import GoogleGenAI
 
 # 0. API Keys Setup
 PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
@@ -48,7 +48,7 @@ st.markdown("---")
 @st.cache_resource
 def initialize_rag():
     embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
-    llm = Gemini(model_name="models/gemini-1.5-flash", api_key=GEMINI_API_KEY, temperature=0.1)
+    llm = GoogleGenAI(model="gemini-1.5-flash", api_key=GEMINI_API_KEY, temperature=0.1)
     
     Settings.llm = llm
     Settings.embed_model = embed_model
