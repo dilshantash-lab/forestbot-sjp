@@ -17,10 +17,14 @@ GROQ_MODEL = "openai/gpt-oss-120b"
 TOP_K = 8                    # how many chunks to fetch from Pinecone
 MAX_CONTEXT_CHARS = 9000     # keeps the request small enough for Groq's free limits
 MAX_SOURCES_SHOWN = 3
+DEFAULT_MIN_SCORE = 0.0      # your scores are around 0.7 for good matches
 
 NO_INFO_MESSAGE = (
     "ඔබේ ප්‍රශ්නයට අදාළ තොරතුරු දැනට ForestBot.SJP හි ලේඛන ගබඩාවේ සොයාගත නොහැකි විය.\n\n"
     "*The indexed documents do not contain enough information to answer this question.*"
+)
+EMPTY_REPLY_MESSAGE = (
+    "⚠️ The language model returned an empty reply. Please ask again or rephrase the question."
 )
 
 SYSTEM_INSTRUCTION = (
@@ -32,8 +36,12 @@ SYSTEM_INSTRUCTION = (
     "2. When you state a fact, cite its source number like [1].\n"
     "3. If the context only partly answers the question, answer the supported part "
     "and clearly say what is not covered.\n"
-    "4. If the context does not help at all, reply with exactly: NO_INFO\n"
-    "5. Reply in the same language as the question. Keep act names, section numbers "
+    "4. If the question is only a topic or keywords (for example 'life cycle assessment'), "
+    "treat it as 'What do the sources say about this topic?' and summarise what the "
+    "context says about it.\n"
+    "5. Reply with exactly NO_INFO only if the context contains nothing at all related "
+    "to the question.\n"
+    "6. Reply in the same language as the question. Keep act names, section numbers "
     "and amounts exactly as written in the context."
 )
 
@@ -71,9 +79,9 @@ with st.sidebar:
     with st.expander("⚙️ Advanced (for testing)"):
         show_debug = st.checkbox("Show retrieval details", value=True)
         min_score = st.slider(
-            "Minimum relevance score", 0.0, 0.9, 0.30, 0.05,
-            help="Chunks scoring below this are ignored. Lower it if the bot says "
-                 "'no information' too often; raise it if answers look off-topic.",
+            "Minimum relevance score", 0.0, 0.9, DEFAULT_MIN_SCORE, 0.05,
+            help="Chunks scoring below this are ignored. Keep it at 0 unless "
+                 "off-topic chunks are being used.",
         )
     st.caption("University of Sri Jayewardenepura | Academic Research Project")
 
@@ -128,12 +136,20 @@ def clean_name(file_name):
     return name.replace("_", " ").strip()
 
 
-def build_search_query(prompt, history):
-    """Very short follow-up questions borrow the previous question's words."""
-    previous = [m["content"] for m in history if m["role"] == "user"]
-    if len(prompt.split()) < 5 and previous:
-        return previous[-1] + " " + prompt
-    return prompt
+def build_llm_history(history, max_pairs=2):
+    """Earlier question/answer pairs, for follow-up questions.
+    Only exchanges that got a REAL answer are kept. 'No information' replies are
+    never sent back, because the model would copy them again and again."""
+    pairs = []
+    for i in range(len(history) - 1):
+        a, b = history[i], history[i + 1]
+        if a["role"] == "user" and b["role"] == "assistant" and b.get("ok"):
+            pairs.append((a["content"], b["content"]))
+    msgs = []
+    for question, answer in pairs[-max_pairs:]:
+        msgs.append({"role": "user", "content": question})
+        msgs.append({"role": "assistant", "content": answer})
+    return msgs
 
 
 # ---------------------------------------------------------------
@@ -149,6 +165,8 @@ for message in st.session_state.messages:
         if show_debug and message.get("debug"):
             with st.expander("🔎 Retrieval details"):
                 st.table(message["debug"])
+                if message.get("debug_note"):
+                    st.text(message["debug_note"])
 
 # ---------------------------------------------------------------
 # 7. Handle a new question
@@ -162,8 +180,7 @@ if prompt := st.chat_input("Ask ForestBot.SJP any forestry or environmental law 
     with st.chat_message("assistant"):
         with st.spinner("Searching documents and preparing the answer..."):
             # --- Search Pinecone ---
-            search_query = build_search_query(prompt, history_before)
-            query_vector = embed_model.encode(search_query).tolist()
+            query_vector = embed_model.encode(prompt).tolist()
             results = pinecone_index.query(
                 vector=query_vector, top_k=TOP_K, include_metadata=True
             )
@@ -200,15 +217,17 @@ if prompt := st.chat_input("Ask ForestBot.SJP any forestry or environmental law 
                     "used": "yes" if kept else "no",
                 })
 
-            # --- Ask Groq (only if we found something relevant) ---
+            # --- Ask Groq (only if we found something) ---
             answer = NO_INFO_MESSAGE
             sources_text = ""
+            answer_ok = False
+            notes = [f"chunks sent to the model: {len(context_blocks)} ({total_chars} characters)"]
 
             if context_blocks:
+                notes.append("first chunk starts: " + context_blocks[0][:300].replace("\n", " "))
                 context = "\n\n---\n\n".join(context_blocks)
                 messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
-                for m in history_before[-4:]:            # last 2 exchanges, for follow-ups
-                    messages.append({"role": m["role"], "content": m["content"]})
+                messages += build_llm_history(history_before)
                 messages.append({
                     "role": "user",
                     "content": f"Context:\n{context}\n\nQuestion: {prompt}\nAnswer:",
@@ -219,24 +238,36 @@ if prompt := st.chat_input("Ask ForestBot.SJP any forestry or environmental law 
                         model=GROQ_MODEL,
                         temperature=0.1,
                     )
-                    reply = (completion.choices[0].message.content or "").strip()
-                    if reply and not reply.startswith("NO_INFO"):
+                    choice = completion.choices[0]
+                    reply = (choice.message.content or "").strip()
+                    notes.append(f"model finish reason: {choice.finish_reason}")
+                    notes.append("model reply starts: " + (reply[:80] or "(empty)"))
+                    if not reply:
+                        answer = EMPTY_REPLY_MESSAGE
+                    elif not reply.startswith("NO_INFO"):
                         answer = reply
+                        answer_ok = True
                         for file_name, page in used_sources[:MAX_SOURCES_SHOWN]:
-                            sources_text += (
-                                f"• **{file_name}**  \n  📄 Page: {page}\n\n"
-                            )
+                            sources_text += f"• **{file_name}**  \n"
+                            if str(page) not in ("-", ""):
+                                sources_text += f"  📄 Page: {page}  \n"
+                            sources_text += "\n"
                 except Exception as e:
                     answer = (
                         "⚠️ The language model could not answer right now "
                         "(possibly a rate limit). Please wait a minute and try again.\n\n"
                         f"`{type(e).__name__}: {str(e)[:200]}`"
                     )
+                    notes.append(f"error: {type(e).__name__}")
+            else:
+                notes.append("no chunk passed the filter, so the model was not asked")
 
     st.session_state.messages.append({
         "role": "assistant",
         "content": answer,
         "sources": sources_text,
         "debug": debug_rows,
+        "debug_note": "\n".join(notes),
+        "ok": answer_ok,
     })
     st.rerun()
