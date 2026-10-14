@@ -1,4 +1,5 @@
 import json
+import re
 from urllib.parse import unquote_plus
 
 import streamlit as st
@@ -17,7 +18,13 @@ GROQ_MODEL = "openai/gpt-oss-120b"
 TOP_K = 8                    # how many chunks to fetch from Pinecone
 MAX_CONTEXT_CHARS = 9000     # keeps the request small enough for Groq's free limits
 MAX_SOURCES_SHOWN = 3
-DEFAULT_MIN_SCORE = 0.0      # your scores are around 0.7 for good matches
+DEFAULT_MIN_SCORE = 0.0
+
+# The two document sets inside your Pinecone index
+NAMESPACES = {
+    "New (clean text)": "clean",      # made by reindex.py
+    "Old (first upload)": "",         # the original upload
+}
 
 NO_INFO_MESSAGE = (
     "ඔබේ ප්‍රශ්නයට අදාළ තොරතුරු දැනට ForestBot.SJP හි ලේඛන ගබඩාවේ සොයාගත නොහැකි විය.\n\n"
@@ -44,6 +51,9 @@ SYSTEM_INSTRUCTION = (
     "6. Reply in the same language as the question. Keep act names, section numbers "
     "and amounts exactly as written in the context."
 )
+
+WORD = re.compile(r"^[\(\[\"'“‘]?[A-Za-z][A-Za-z0-9'’\-/]*[\)\]\"'”’.,;:!?]*$")
+NUMBER = re.compile(r"^[\(\[]?[0-9][0-9.,%/\-]*[\)\]]?[.,;:]?$")
 
 # ---------------------------------------------------------------
 # 1. Page configuration + session state
@@ -78,12 +88,19 @@ with st.sidebar:
     st.markdown("---")
     with st.expander("⚙️ Advanced (for testing)"):
         show_debug = st.checkbox("Show retrieval details", value=True)
+        namespace_label = st.selectbox(
+            "Document set", list(NAMESPACES.keys()),
+            help="'New' is the clean text uploaded by reindex.py. "
+                 "'Old' is the first upload.",
+        )
         min_score = st.slider(
             "Minimum relevance score", 0.0, 0.9, DEFAULT_MIN_SCORE, 0.05,
             help="Chunks scoring below this are ignored. Keep it at 0 unless "
                  "off-topic chunks are being used.",
         )
     st.caption("University of Sri Jayewardenepura | Academic Research Project")
+
+namespace = NAMESPACES[namespace_label]
 
 # ---------------------------------------------------------------
 # 3. Title
@@ -128,6 +145,17 @@ def get_chunk_text(meta):
     return ""
 
 
+def looks_readable(text, min_ratio=0.5):
+    """False for garbled text (broken symbols instead of words)."""
+    if text.count("�") / max(len(text), 1) > 0.02:
+        return False
+    tokens = text.split()
+    if len(tokens) < 5:
+        return True
+    good = sum(1 for t in tokens if WORD.match(t) or NUMBER.match(t))
+    return good / len(tokens) >= min_ratio
+
+
 def clean_name(file_name):
     name = unquote_plus(str(file_name))
     for ext in (".pdf", ".docx", ".txt"):
@@ -162,11 +190,11 @@ for message in st.session_state.messages:
             st.markdown("---")
             st.markdown("##### 📚 **Sources & References Cited:**")
             st.markdown(message["sources"])
-        if show_debug and message.get("debug"):
+        if show_debug and message.get("debug_note"):
             with st.expander("🔎 Retrieval details"):
-                st.table(message["debug"])
-                if message.get("debug_note"):
-                    st.text(message["debug_note"])
+                if message.get("debug"):
+                    st.table(message["debug"])
+                st.text(message["debug_note"])
 
 # ---------------------------------------------------------------
 # 7. Handle a new question
@@ -182,8 +210,12 @@ if prompt := st.chat_input("Ask ForestBot.SJP any forestry or environmental law 
             # --- Search Pinecone ---
             query_vector = embed_model.encode(prompt).tolist()
             results = pinecone_index.query(
-                vector=query_vector, top_k=TOP_K, include_metadata=True
+                vector=query_vector,
+                top_k=TOP_K,
+                include_metadata=True,
+                namespace=namespace,
             )
+            matches = results.get("matches", [])
 
             context_blocks = []
             used_sources = []        # (file, page) in score order, no repeats
@@ -191,15 +223,19 @@ if prompt := st.chat_input("Ask ForestBot.SJP any forestry or environmental law 
             seen_texts = set()
             total_chars = 0
 
-            for match in results.get("matches", []):
+            for match in matches:
                 meta = match.get("metadata", {}) or {}
                 score = float(match.get("score", 0))
                 file_name = clean_name(meta.get("file_name", "Unknown document"))
                 page = meta.get("page_label", meta.get("page_number", "-"))
                 text = get_chunk_text(meta)
 
-                kept = False
-                if text and score >= min_score and text not in seen_texts:
+                status = "no"
+                if not text:
+                    status = "no text"
+                elif not looks_readable(text):
+                    status = "garbled"
+                elif score >= min_score and text not in seen_texts:
                     if total_chars + len(text) <= MAX_CONTEXT_CHARS:
                         seen_texts.add(text)
                         total_chars += len(text)
@@ -208,20 +244,25 @@ if prompt := st.chat_input("Ask ForestBot.SJP any forestry or environmental law 
                         )
                         if (file_name, page) not in used_sources:
                             used_sources.append((file_name, page))
-                        kept = True
+                        status = "yes"
 
                 debug_rows.append({
                     "score": round(score, 3),
                     "document": file_name[:60],
                     "page": str(page),
-                    "used": "yes" if kept else "no",
+                    "used": status,
                 })
 
-            # --- Ask Groq (only if we found something) ---
+            # --- Ask Groq (only if we found something readable) ---
             answer = NO_INFO_MESSAGE
             sources_text = ""
             answer_ok = False
-            notes = [f"chunks sent to the model: {len(context_blocks)} ({total_chars} characters)"]
+            notes = [
+                f"document set: {namespace_label}",
+                f"chunks sent to the model: {len(context_blocks)} ({total_chars} characters)",
+            ]
+            if not matches:
+                notes.append("Pinecone returned no matches (is this document set empty?)")
 
             if context_blocks:
                 notes.append("first chunk starts: " + context_blocks[0][:300].replace("\n", " "))
@@ -260,7 +301,7 @@ if prompt := st.chat_input("Ask ForestBot.SJP any forestry or environmental law 
                     )
                     notes.append(f"error: {type(e).__name__}")
             else:
-                notes.append("no chunk passed the filter, so the model was not asked")
+                notes.append("no readable chunk was found, so the model was not asked")
 
     st.session_state.messages.append({
         "role": "assistant",
