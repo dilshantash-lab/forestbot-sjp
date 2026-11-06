@@ -1,5 +1,7 @@
 import json
 import re
+import time
+from pathlib import Path
 from urllib.parse import unquote_plus
 
 import streamlit as st
@@ -20,11 +22,9 @@ MAX_CONTEXT_CHARS = 9000     # keeps the request small enough for Groq's free li
 MAX_SOURCES_SHOWN = 3
 DEFAULT_MIN_SCORE = 0.0
 
-# The two document sets inside your Pinecone index
-NAMESPACES = {
-    "New (clean text)": "clean",      # made by reindex.py
-    "Old (first upload)": "",         # the original upload
-}
+# The document set (Pinecone namespace) made by reindex.py
+NAMESPACE = "clean"
+NAMESPACE_LABEL = "clean text"
 
 NO_INFO_MESSAGE = (
     "ඔබේ ප්‍රශ්නයට අදාළ තොරතුරු දැනට ForestBot.SJP හි ලේඛන ගබඩාවේ සොයාගත නොහැකි විය.\n\n"
@@ -41,19 +41,30 @@ SYSTEM_INSTRUCTION = (
     "1. Use ONLY the facts in the numbered context sources. Do not add outside "
     "knowledge, and never guess section numbers, fines or figures.\n"
     "2. When you state a fact, cite its source number like [1].\n"
-    "3. If the context only partly answers the question, answer the supported part "
+    "3. Be specific about WHERE and WHAT each fact refers to. Name the exact place, "
+    "park, species, Act or study (and the document title) that the source is about. "
+    "If the source text does not name the specific place or park, say so clearly, "
+    "for example 'the source does not name the park'. Never present a finding about one "
+    "place as if it applied to all of Sri Lanka.\n"
+    "4. If the context only partly answers the question, answer the supported part "
     "and clearly say what is not covered.\n"
-    "4. If the question is only a topic or keywords (for example 'life cycle assessment'), "
+    "5. If the question is only a topic or keywords (for example 'life cycle assessment'), "
     "treat it as 'What do the sources say about this topic?' and summarise what the "
     "context says about it.\n"
-    "5. Reply with exactly NO_INFO only if the context contains nothing at all related "
+    "6. Reply with exactly NO_INFO only if the context contains nothing at all related "
     "to the question.\n"
-    "6. Reply in the same language as the question. Keep act names, section numbers "
+    "7. Reply in the same language as the question. Keep act names, section numbers "
     "and amounts exactly as written in the context."
 )
 
 WORD = re.compile(r"^[\(\[\"'“‘]?[A-Za-z][A-Za-z0-9'’\-/]*[\)\]\"'”’.,;:!?]*$")
 NUMBER = re.compile(r"^[\(\[]?[0-9][0-9.,%/\-]*[\)\]]?[.,;:]?$")
+
+# Nice document titles (made by make_titles.py). If the file is missing, file names are used.
+try:
+    TITLES = json.loads(Path(__file__).with_name("titles.json").read_text(encoding="utf-8"))
+except Exception:
+    TITLES = {}
 
 # ---------------------------------------------------------------
 # 1. Page configuration + session state
@@ -68,7 +79,7 @@ if "messages" not in st.session_state:
 # ---------------------------------------------------------------
 with st.sidebar:
     st.title("🌲 ForestBot.SJP")
-    st.markdown("**AI-Powered Forestry Law & Environmental Science Assistant**")
+    st.markdown("**AI-Powered Forestry and Environmental Science Assistant**")
     st.markdown("---")
 
     if st.button("➕ Start New Chat", use_container_width=True):
@@ -88,11 +99,6 @@ with st.sidebar:
     st.markdown("---")
     with st.expander("⚙️ Advanced (for testing)"):
         show_debug = st.checkbox("Show retrieval details", value=True)
-        namespace_label = st.selectbox(
-            "Document set", list(NAMESPACES.keys()),
-            help="'New' is the clean text uploaded by reindex.py. "
-                 "'Old' is the first upload.",
-        )
         min_score = st.slider(
             "Minimum relevance score", 0.0, 0.9, DEFAULT_MIN_SCORE, 0.05,
             help="Chunks scoring below this are ignored. Keep it at 0 unless "
@@ -100,13 +106,13 @@ with st.sidebar:
         )
     st.caption("University of Sri Jayewardenepura | Academic Research Project")
 
-namespace = NAMESPACES[namespace_label]
+namespace = NAMESPACE
 
 # ---------------------------------------------------------------
 # 3. Title
 # ---------------------------------------------------------------
 st.title("🌲 ForestBot.SJP")
-st.subheader("Interactive Knowledge Assistant for Sri Lankan Forestry & Environmental Sciences")
+st.subheader("Interactive Knowledge Assistant for Sri Lankan Forestry and Environmental Science")
 st.markdown("---")
 
 
@@ -157,6 +163,9 @@ def looks_readable(text, min_ratio=0.5):
 
 
 def clean_name(file_name):
+    raw = str(file_name)
+    if raw in TITLES and TITLES[raw]:
+        return TITLES[raw]
     name = unquote_plus(str(file_name))
     for ext in (".pdf", ".docx", ".txt"):
         if name.lower().endswith(ext):
@@ -199,7 +208,7 @@ for message in st.session_state.messages:
 # ---------------------------------------------------------------
 # 7. Handle a new question
 # ---------------------------------------------------------------
-if prompt := st.chat_input("Ask ForestBot.SJP any forestry or environmental law question..."):
+if prompt := st.chat_input("Ask ForestBot.SJP any Forestry and Environmental Science question..."):
     history_before = list(st.session_state.messages)
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
@@ -209,13 +218,21 @@ if prompt := st.chat_input("Ask ForestBot.SJP any forestry or environmental law 
         with st.spinner("Searching documents and preparing the answer..."):
             # --- Search Pinecone ---
             query_vector = embed_model.encode(prompt).tolist()
-            results = pinecone_index.query(
-                vector=query_vector,
-                top_k=TOP_K,
-                include_metadata=True,
-                namespace=namespace,
-            )
-            matches = results.get("matches", [])
+            results = None
+            search_error = None
+            for attempt in range(1, 4):          # try up to 3 times if Pinecone is busy
+                try:
+                    results = pinecone_index.query(
+                        vector=query_vector,
+                        top_k=TOP_K,
+                        include_metadata=True,
+                        namespace=namespace,
+                    )
+                    break
+                except Exception as e:
+                    search_error = f"{type(e).__name__}: {str(e)[:200]}"
+                    time.sleep(2 * attempt)
+            matches = results.get("matches", []) if results else []
 
             context_blocks = []
             used_sources = []        # (file, page) in score order, no repeats
@@ -258,10 +275,12 @@ if prompt := st.chat_input("Ask ForestBot.SJP any forestry or environmental law 
             sources_text = ""
             answer_ok = False
             notes = [
-                f"document set: {namespace_label}",
+                f"document set: {NAMESPACE_LABEL}",
                 f"chunks sent to the model: {len(context_blocks)} ({total_chars} characters)",
             ]
-            if not matches:
+            if search_error:
+                notes.append("Pinecone error: " + search_error)
+            elif not matches:
                 notes.append("Pinecone returned no matches (is this document set empty?)")
 
             if context_blocks:
@@ -300,6 +319,10 @@ if prompt := st.chat_input("Ask ForestBot.SJP any forestry or environmental law 
                         f"`{type(e).__name__}: {str(e)[:200]}`"
                     )
                     notes.append(f"error: {type(e).__name__}")
+            elif search_error:
+                answer = ("⚠️ The document database (Pinecone) is busy or temporarily "
+                          "unavailable. Please wait a minute and ask again.")
+                notes.append("the model was not asked because the search failed")
             else:
                 notes.append("no readable chunk was found, so the model was not asked")
 
